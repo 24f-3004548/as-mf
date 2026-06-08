@@ -93,9 +93,6 @@ def list_schemes():
 
 @app.get("/api/schemes/{scheme_id}")
 def get_scheme_detail(scheme_id: int):
-    """Return full detail for one scheme including per-stock red flag breakdown."""
-
-    # 1. Scheme meta
     s_res = (
         sb.table("mf_schemes")
         .select("id, scheme_name, scheme_code, aum_cr, as_of_date")
@@ -107,7 +104,6 @@ def get_scheme_detail(scheme_id: int):
         raise HTTPException(404, "Scheme not found")
     scheme = s_res.data
 
-    # 2. Scheme score
     sc_res = (
         sb.table("scheme_scores")
         .select("total_holdings, matched_holdings, unmatched_holdings, coverage_pct, weighted_rf_score, typology")
@@ -116,7 +112,6 @@ def get_scheme_detail(scheme_id: int):
     )
     score = sc_res.data[0] if sc_res.data else {}
 
-    # 3. All holdings for this scheme
     h_res = (
         sb.table("scheme_holdings")
         .select("mf_name, weight_pct, company_id")
@@ -126,10 +121,8 @@ def get_scheme_detail(scheme_id: int):
     )
     holdings = h_res.data or []
 
-    # 4. Collect all company_ids that were matched
     company_ids = [h["company_id"] for h in holdings if h.get("company_id")]
 
-    # 5. Fetch company names
     comp_map = {}
     if company_ids:
         c_res = (
@@ -140,7 +133,6 @@ def get_scheme_detail(scheme_id: int):
         )
         comp_map = {r["id"]: r["fin_name"] for r in (c_res.data or [])}
 
-    # 6. Fetch latest red flags for those companies (all years, we'll pick latest)
     flags_map = {}
     if company_ids:
         f_res = (
@@ -154,13 +146,12 @@ def get_scheme_detail(scheme_id: int):
             .order("year", desc=True)
             .execute()
         )
-        # Keep only the latest year per company
         for r in (f_res.data or []):
             cid = r["company_id"]
             if cid not in flags_map:
                 flags_map[cid] = r
 
-    # 7. Build matched / unmatched lists
+    #build matched / unmatched lists
     matched   = []
     unmatched = []
 
@@ -223,7 +214,6 @@ class ExplainRequest(BaseModel):
 
 @app.post("/api/explain")
 async def explain_scheme(req: ExplainRequest):
-    """Generate a Gemini-powered natural language explanation of the scheme's risk profile."""
     top_text = "\n".join(
         f"  - {h['fin_name']} ({h['weight_pct']:.2f}% weight, {h['total_red_flags']} red flags, {h.get('weighted_contribution', 0):.4f} weighted contribution)"
         for h in req.top_holdings[:10]

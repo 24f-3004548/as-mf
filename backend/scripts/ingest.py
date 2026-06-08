@@ -1,16 +1,3 @@
-#!/usr/bin/env python3
-"""
-ingest.py  —  Load financials.xlsx + Scheme_Holdings.xlsx into Supabase
-              then compute red flags and scheme scores.
-
-Usage:
-    pip install pandas numpy supabase python-dotenv openpyxl
-    python scripts/ingest.py \
-        --financials path/to/financials.xlsx \
-        --holdings   path/to/Scheme_Holdings.xlsx \
-        --date       2025-03-31          # as_of_date for this holdings snapshot
-"""
-
 import os, ast, argparse
 import pandas as pd
 import numpy as np
@@ -22,13 +9,13 @@ from supabase import create_client, Client
 warnings.filterwarnings("ignore")
 load_dotenv()
 
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]   # service-role key for writes
+SUPABASE_URL = os.environ["SUPABASE_URL"] #db
+SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]  
 MAX_FLAGS    = 16
 
 sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+#helpers
 
 def safe_div(a, b):
     return np.where(b != 0, a / b, np.nan)
@@ -50,13 +37,11 @@ def bool_to_py(v):
     if pd.isna(v): return None
     return bool(v)
 
-# ── 1. load & compute financials ─────────────────────────────────────────────
-
 def load_financials(path: str) -> pd.DataFrame:
     df = pd.read_excel(path, sheet_name="Sheet1", skiprows=3)
     df.columns = df.columns.str.strip().str.replace(r"\s+", " ", regex=True)
     df = df.sort_values(["Company Name", "CFC_Year"]).reset_index(drop=True)
-
+    #cleaning and deriving variables
     df["COGS"] = (
         df["PLC_ Opening Raw Materials"].fillna(0)
         + df["PLC_ Purchases Raw Materials"].fillna(0)
@@ -107,7 +92,7 @@ def load_financials(path: str) -> pd.DataFrame:
 
     df["R_SalesAvgRec_5min"] = df.groupby("Company Name")["R_SalesAvgRec"].transform(
         lambda x: x.shift(1).rolling(5).min())
-
+    #checks
     df["RS1"]  = opposite_sign(df["d_Sales"], df["d_PAT"])
     df["RS2"]  = opposite_sign(df["d_Sales"], df["d_COGS"])
     df["RS3"]  = opposite_sign(df["d_Sales"], df["d_OpExp"])
@@ -132,7 +117,7 @@ def load_financials(path: str) -> pd.DataFrame:
 
     return df
 
-# ── 2. upsert to Supabase ────────────────────────────────────────────────────
+#db entry
 
 def upsert_companies(df: pd.DataFrame):
     names = df["Company Name"].dropna().unique().tolist()
@@ -271,7 +256,6 @@ def upsert_holdings(path: str, as_of: str, company_map: dict):
         isin        = str(row.get("s_isin","")).strip() or None
         aum         = float(row["n_schemeaum"]) if pd.notna(row["n_schemeaum"]) else None
 
-        # upsert scheme
         scheme_row = {
             "scheme_name": scheme_name,
             "scheme_code": scheme_code or None,
@@ -357,8 +341,6 @@ def compute_scheme_score(scheme_id: int, holdings: dict, mf_map: dict):
         "weighted_rf_score": mf_score,
         "typology":          typology,
     }, on_conflict="scheme_id").execute()
-
-# ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
